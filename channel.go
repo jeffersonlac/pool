@@ -5,16 +5,24 @@ import (
 	"fmt"
 	"net"
 	"sync"
+	"time"
 )
 
 // channelPool implements the Pool interface based on buffered channels.
 type channelPool struct {
 	// storage for our net.Conn connections
-	mu    sync.RWMutex
-	conns chan net.Conn
+	mu    	sync.RWMutex
+	conns 	chan *connInfo
+	// every connection's timeout
+	timeout time.Duration
 
 	// net.Conn generator
 	factory Factory
+}
+
+type connInfo struct {
+	conn 		net.Conn
+	createTime 	time.Time
 }
 
 // Factory is a function to create new connections.
@@ -26,14 +34,15 @@ type Factory func() (net.Conn, error)
 // until a new Get() is called. During a Get(), If there is no new connection
 // available in the pool, a new connection will be created via the Factory()
 // method.
-func NewChannelPool(initialCap, maxCap int, factory Factory) (Pool, error) {
+func NewChannelPool(initialCap, maxCap int, factory Factory, timeout time.Duration) (Pool, error) {
 	if initialCap < 0 || maxCap <= 0 || initialCap > maxCap {
 		return nil, errors.New("invalid capacity settings")
 	}
 
 	c := &channelPool{
-		conns:   make(chan net.Conn, maxCap),
+		conns:   make(chan *connInfo, maxCap),
 		factory: factory,
+		timeout: timeout,
 	}
 
 	// create initial connections, if something goes wrong,
@@ -44,13 +53,13 @@ func NewChannelPool(initialCap, maxCap int, factory Factory) (Pool, error) {
 			c.Close()
 			return nil, fmt.Errorf("factory is not able to fill the pool: %s", err)
 		}
-		c.conns <- conn
+		c.conns <- &connInfo{conn: conn, createTime: time.Now()}
 	}
 
 	return c, nil
 }
 
-func (c *channelPool) getConnsAndFactory() (chan net.Conn, Factory) {
+func (c *channelPool) getConnsAndFactory() (chan *connInfo, Factory) {
 	c.mu.RLock()
 	conns := c.conns
 	factory := c.factory
@@ -69,20 +78,31 @@ func (c *channelPool) Get() (net.Conn, error) {
 
 	// wrap our connections with out custom net.Conn implementation (wrapConn
 	// method) that puts the connection back to the pool if it's closed.
-	select {
-	case conn := <-conns:
-		if conn == nil {
-			return nil, ErrClosed
-		}
+	for {
+		select {
+		case connInfo := <-conns:
+			if connInfo == nil {
+				return nil, ErrClosed
+			}
 
-		return c.wrapConn(conn), nil
-	default:
-		conn, err := factory()
-		if err != nil {
-			return nil, err
-		}
+			if timeout := c.timeout; timeout > 0 {
+				if connInfo.createTime.Add(timeout).Before(time.Now()) {
+					if connInfo.conn != nil {
+						connInfo.conn.Close()
+					}
+					continue
+				}
+			}
 
-		return c.wrapConn(conn), nil
+			return c.wrapConn(connInfo.conn), nil
+		default:
+			conn, err := factory()
+			if err != nil {
+				return nil, err
+			}
+
+			return c.wrapConn(conn), nil
+		}
 	}
 }
 
@@ -104,7 +124,7 @@ func (c *channelPool) put(conn net.Conn) error {
 	// put the resource back into the pool. If the pool is full, this will
 	// block and the default case will be executed.
 	select {
-	case c.conns <- conn:
+	case c.conns <- &connInfo{conn: conn, createTime: time.Now()}:
 		return nil
 	default:
 		// pool is full, close passed connection
@@ -124,8 +144,8 @@ func (c *channelPool) Close() {
 	}
 
 	close(conns)
-	for conn := range conns {
-		conn.Close()
+	for connInfo := range conns {
+		connInfo.conn.Close()
 	}
 }
 
