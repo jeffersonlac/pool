@@ -87,7 +87,7 @@ func TestPool_Get(t *testing.T) {
 }
 
 func TestPool_Put(t *testing.T) {
-	p, err := NewChannelPool(0, 30, factory)
+	p, err := NewChannelPool(0, 30, factory, 5*time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -208,7 +208,7 @@ func TestPoolConcurrent(t *testing.T) {
 }
 
 func TestPoolWriteRead(t *testing.T) {
-	p, _ := NewChannelPool(0, 30, factory)
+	p, _ := NewChannelPool(0, 30, factory, 5*time.Second)
 
 	conn, _ := p.Get()
 
@@ -220,7 +220,7 @@ func TestPoolWriteRead(t *testing.T) {
 }
 
 func TestPoolConcurrent2(t *testing.T) {
-	p, _ := NewChannelPool(0, 30, factory)
+	p, _ := NewChannelPool(0, 30, factory, 5*time.Second)
 
 	var wg sync.WaitGroup
 
@@ -250,7 +250,7 @@ func TestPoolConcurrent2(t *testing.T) {
 }
 
 func TestPoolConcurrent3(t *testing.T) {
-	p, _ := NewChannelPool(0, 1, factory)
+	p, _ := NewChannelPool(0, 1, factory, 5*time.Second)
 
 	var wg sync.WaitGroup
 
@@ -268,7 +268,7 @@ func TestPoolConcurrent3(t *testing.T) {
 }
 
 func newChannelPool() (Pool, error) {
-	return NewChannelPool(InitialCap, MaximumCap, factory)
+	return NewChannelPool(InitialCap, MaximumCap, factory, 5*time.Second)
 }
 
 func simpleTCPServer() {
