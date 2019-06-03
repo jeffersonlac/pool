@@ -21,7 +21,8 @@ func (p *PoolConn) Close() error {
 
 	if p.unusable {
 		if p.Conn != nil {
-			return p.Conn.Close()
+			_, callbacks := p.c.getConnsAndCallbacks()
+			return p.c.closeConn(p.Conn, ConnUnusable, callbacks.ConnClosed)
 		}
 		return nil
 	}
