@@ -15,6 +15,10 @@ var (
 	network    = "tcp"
 	address    = "127.0.0.1:7777"
 	factory    = func() (net.Conn, error) { return net.Dial(network, address) }
+	callbacks  = Callbacks{
+		Factory:    factory,
+		ConnClosed: nil,
+	}
 )
 
 func init() {
@@ -87,7 +91,7 @@ func TestPool_Get(t *testing.T) {
 }
 
 func TestPool_Put(t *testing.T) {
-	p, err := NewChannelPool(0, 30, factory, 5*time.Second)
+	p, err := NewChannelPool(0, 30, callbacks, 5*time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -120,7 +124,28 @@ func TestPool_Put(t *testing.T) {
 }
 
 func TestPool_PutUnusableConn(t *testing.T) {
-	p, _ := newChannelPool()
+	connClosedCount := 0
+	connClosedReasons := []CloseConnReason{
+		ConnUnusable,
+		PoolClosed,
+		PoolClosed,
+		PoolClosed,
+		PoolClosed,
+	}
+	connClosed := func(reason CloseConnReason, err error) {
+		if err != nil {
+			t.Error(err)
+		}
+		expectedReason := connClosedReasons[connClosedCount]
+		if reason != expectedReason {
+			t.Errorf("Wrong conn closed reason. Expecting %s, got %s", expectedReason, reason)
+		}
+		connClosedCount++
+	}
+	p, _ := NewChannelPool(InitialCap, MaximumCap, Callbacks{
+		Factory:    factory,
+		ConnClosed: connClosed,
+	}, 5*time.Second)
 	defer p.Close()
 
 	// ensure pool is not empty
@@ -142,7 +167,7 @@ func TestPool_PutUnusableConn(t *testing.T) {
 	}
 	conn.Close()
 	if p.Len() != poolSize-1 {
-		t.Errorf("Pool size is expected to be initial_size - 1", p.Len(), poolSize-1)
+		t.Errorf("Pool size is expected to be initial_size - 1. Expecting %d, got %d", p.Len(), poolSize-1)
 	}
 }
 
@@ -168,8 +193,12 @@ func TestPool_Close(t *testing.T) {
 		t.Errorf("Close error, conns channel should be nil")
 	}
 
-	if c.factory != nil {
+	if c.callbacks.Factory != nil {
 		t.Errorf("Close error, factory should be nil")
+	}
+
+	if c.callbacks.ConnClosed != nil {
+		t.Errorf("Close error, connClosed should be nil")
 	}
 
 	_, err := p.Get()
@@ -208,7 +237,7 @@ func TestPoolConcurrent(t *testing.T) {
 }
 
 func TestPoolWriteRead(t *testing.T) {
-	p, _ := NewChannelPool(0, 30, factory, 5*time.Second)
+	p, _ := NewChannelPool(0, 30, callbacks, 5*time.Second)
 
 	conn, _ := p.Get()
 
@@ -220,7 +249,7 @@ func TestPoolWriteRead(t *testing.T) {
 }
 
 func TestPoolConcurrent2(t *testing.T) {
-	p, _ := NewChannelPool(0, 30, factory, 5*time.Second)
+	p, _ := NewChannelPool(0, 30, callbacks, 5*time.Second)
 
 	var wg sync.WaitGroup
 
@@ -250,7 +279,7 @@ func TestPoolConcurrent2(t *testing.T) {
 }
 
 func TestPoolConcurrent3(t *testing.T) {
-	p, _ := NewChannelPool(0, 1, factory, 5*time.Second)
+	p, _ := NewChannelPool(0, 1, callbacks, 5*time.Second)
 
 	var wg sync.WaitGroup
 
@@ -267,8 +296,41 @@ func TestPoolConcurrent3(t *testing.T) {
 	wg.Wait()
 }
 
+func TestPoolTimeout(t *testing.T) {
+	calledFactoryCount := 0
+	factory := func() (net.Conn, error) {
+		calledFactoryCount++
+		return net.Dial(network, address)
+	}
+	connClosed := func(reason CloseConnReason, err error) {
+		if err != nil {
+			t.Error(err)
+		}
+		if reason != ConnTimeout {
+			t.Errorf("Wrong conn closed reason. Expecting %s, got %s", ConnTimeout, reason)
+		}
+	}
+
+	p, _ := NewChannelPool(10, 20, Callbacks{
+		Factory:    factory,
+		ConnClosed: connClosed,
+	}, 1*time.Millisecond)
+
+	// sleep 10 ms to let all initial connections reach timeout
+	time.Sleep(10 * time.Millisecond)
+
+	conn, err := p.Get()
+	if err != nil {
+		t.Error(err)
+	}
+	conn.Close()
+	if calledFactoryCount != 11 {
+		t.Errorf("Wrong created connections by factory. Expecting 11, got %d", calledFactoryCount)
+	}
+}
+
 func newChannelPool() (Pool, error) {
-	return NewChannelPool(InitialCap, MaximumCap, factory, 5*time.Second)
+	return NewChannelPool(InitialCap, MaximumCap, callbacks, 5*time.Second)
 }
 
 func simpleTCPServer() {
