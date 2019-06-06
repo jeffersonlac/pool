@@ -45,7 +45,7 @@ type Callbacks struct {
 type Factory func() (net.Conn, error)
 
 // ConnClosedCallback is a function to notify there is a connection has been closed.
-type ConnClosedCallback func(reason CloseConnReason, err error)
+type ConnClosedCallback func(remoteAddr string, reason CloseConnReason, err error)
 
 // NewChannelPool returns a new pool based on buffered channels with an initial
 // capacity and maximum capacity. Factory is used when initial capacity is
@@ -176,9 +176,13 @@ func (c *channelPool) Len() int {
 }
 
 func (c *channelPool) closeConn(conn net.Conn, reason CloseConnReason, cb ConnClosedCallback) error {
+	var remoteAddr string
+	if conn.RemoteAddr() != nil {
+		remoteAddr = conn.RemoteAddr().String()
+	}
 	err := conn.Close()
 	if cb != nil {
-		cb(reason, err)
+		cb(remoteAddr, reason, err)
 	}
 	return err
 }

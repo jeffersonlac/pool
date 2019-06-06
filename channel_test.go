@@ -132,7 +132,10 @@ func TestPool_PutUnusableConn(t *testing.T) {
 		PoolClosed,
 		PoolClosed,
 	}
-	connClosed := func(reason CloseConnReason, err error) {
+	connClosed := func(remoteAddr string, reason CloseConnReason, err error) {
+		if remoteAddr != address {
+			t.Errorf("Wrong remoteAddr. Expecting %s, got %s", address, remoteAddr)
+		}
 		if err != nil {
 			t.Error(err)
 		}
@@ -302,7 +305,10 @@ func TestPoolTimeout(t *testing.T) {
 		calledFactoryCount++
 		return net.Dial(network, address)
 	}
-	connClosed := func(reason CloseConnReason, err error) {
+	connClosed := func(remoteAddr string, reason CloseConnReason, err error) {
+		if remoteAddr != address {
+			t.Errorf("Wrong remoteAddr. Expecting %s, got %s", address, remoteAddr)
+		}
 		if err != nil {
 			t.Error(err)
 		}
