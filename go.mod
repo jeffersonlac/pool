@@ -1,3 +1,3 @@
-module github.com/17media/pool
+module github.com/jeffersonlac/pool
 
 go 1.13
