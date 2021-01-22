@@ -20,6 +20,9 @@ const (
 
 // channelPool implements the Pool interface based on buffered channels.
 type channelPool struct {
+	maxCap int
+
+	minCap int
 	// storage for our net.Conn connections
 	mu    sync.RWMutex
 	conns chan *connInfo
@@ -59,9 +62,12 @@ func NewChannelPool(initialCap, maxCap int, callbacks Callbacks, timeout time.Du
 	}
 
 	c := &channelPool{
+		maxCap:    initialCap,
+		minCap:    maxCap,
+		mu:        sync.RWMutex{},
 		conns:     make(chan *connInfo, maxCap),
-		callbacks: callbacks,
 		timeout:   timeout,
+		callbacks: callbacks,
 	}
 
 	// create initial connections, if something goes wrong,
@@ -90,40 +96,47 @@ func (c *channelPool) getConnsAndCallbacks() (chan *connInfo, Callbacks) {
 // connection available in the pool, a new connection will be created via the
 // Factory() method.
 func (c *channelPool) Get() (net.Conn, error) {
-	conns, callbacks := c.getConnsAndCallbacks()
+	conns, _ := c.getConnsAndCallbacks()
 	if conns == nil {
 		return nil, ErrClosed
 	}
 
 	// wrap our connections with out custom net.Conn implementation (wrapConn
 	// method) that puts the connection back to the pool if it's closed.
+	t := time.NewTimer(c.timeout)
 	for {
 		select {
 		case connInfo := <-conns:
 			if connInfo == nil {
 				return nil, ErrClosed
 			}
-
-			if timeout := c.timeout; timeout > 0 {
-				if connInfo.createTime.Add(timeout).Before(time.Now()) {
-					if connInfo.conn != nil {
-						c.closeConn(connInfo.conn, ConnTimeout, callbacks.ConnClosed)
-
-					}
-					continue
-				}
-			}
-
 			return c.wrapConn(connInfo.conn), nil
-		default:
-			conn, err := callbacks.Factory()
+		case <-t.C:
+			t.Stop()
+			conn, err := c.createConn()
 			if err != nil {
 				return nil, err
 			}
-
 			return c.wrapConn(conn), nil
 		}
 	}
+}
+
+func (c *channelPool) createConn() (net.Conn, error) {
+	_, callbacks := c.getConnsAndCallbacks()
+
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	if c.Len() >= c.maxCap {
+		return nil, fmt.Errorf("Connot Create new connection. Now has %d.Max is %d", c.Len(), c.maxCap)
+	}
+	conn, err := callbacks.Factory()
+	if err != nil {
+		return nil, fmt.Errorf("Cannot create new connection.%s", err)
+	}
+
+	return conn, nil
 }
 
 // put puts the connection back to the pool. If the pool is full or closed,
