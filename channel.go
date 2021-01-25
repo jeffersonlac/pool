@@ -103,7 +103,8 @@ func (c *channelPool) Get() (net.Conn, error) {
 
 	// wrap our connections with out custom net.Conn implementation (wrapConn
 	// method) that puts the connection back to the pool if it's closed.
-	t := time.NewTimer(c.timeout)
+	tTotal := time.NewTimer(c.timeout)
+	tToCreate := time.NewTimer(time.Duration(200) * time.Millisecond)
 	for {
 		select {
 		case connInfo := <-conns:
@@ -111,13 +112,15 @@ func (c *channelPool) Get() (net.Conn, error) {
 				return nil, ErrClosed
 			}
 			return c.wrapConn(connInfo.conn), nil
-		case <-t.C:
-			t.Stop()
+		case <-tToCreate.C:
+			tToCreate.Stop()
 			conn, err := c.createConn()
 			if err != nil {
 				return nil, err
 			}
 			return c.wrapConn(conn), nil
+		case <-tTotal.C:
+			return nil, fmt.Errorf("Cannot get a connection. Timedout: %d milliseconds ", c.timeout.Milliseconds())
 		}
 	}
 }
