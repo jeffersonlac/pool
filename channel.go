@@ -13,7 +13,7 @@ type CloseConnReason string
 
 const (
 	ConnUnusable CloseConnReason = "unusable"
-	ConnTimeout  CloseConnReason = "timeout"
+	ConnTimeout  CloseConnReason = "timeoutToGet"
 	PoolFull     CloseConnReason = "poolFull"
 	PoolClosed   CloseConnReason = "poolClosed"
 )
@@ -26,8 +26,10 @@ type channelPool struct {
 	// storage for our net.Conn connections
 	mu    sync.RWMutex
 	conns chan *connInfo
-	// every connection's timeout
-	timeout time.Duration
+	// every connection's timeoutToGet
+	timeoutToGet time.Duration
+	// wait to create new connection
+	timeoutToCreate time.Duration
 
 	callbacks Callbacks
 }
@@ -56,18 +58,19 @@ type ConnClosedCallback func(remoteAddr string, reason CloseConnReason, err erro
 // until a new Get() is called. During a Get(), If there is no new connection
 // available in the pool, a new connection will be created via the Factory()
 // method.
-func NewChannelPool(initialCap, maxCap int, callbacks Callbacks, timeout time.Duration) (Pool, error) {
+func NewChannelPool(initialCap, maxCap int, callbacks Callbacks, timeoutToGet time.Duration, timeoutToCreate time.Duration) (Pool, error) {
 	if initialCap < 0 || maxCap <= 0 || initialCap > maxCap {
 		return nil, errors.New("invalid capacity settings")
 	}
 
 	c := &channelPool{
-		maxCap:    initialCap,
-		minCap:    maxCap,
-		mu:        sync.RWMutex{},
-		conns:     make(chan *connInfo, maxCap),
-		timeout:   timeout,
-		callbacks: callbacks,
+		maxCap:          initialCap,
+		minCap:          maxCap,
+		mu:              sync.RWMutex{},
+		conns:           make(chan *connInfo, maxCap),
+		timeoutToGet:    timeoutToGet,
+		timeoutToCreate: timeoutToCreate,
+		callbacks:       callbacks,
 	}
 
 	// create initial connections, if something goes wrong,
@@ -103,8 +106,8 @@ func (c *channelPool) Get() (net.Conn, error) {
 
 	// wrap our connections with out custom net.Conn implementation (wrapConn
 	// method) that puts the connection back to the pool if it's closed.
-	tTotal := time.NewTimer(c.timeout)
-	tToCreate := time.NewTimer(time.Duration(200) * time.Millisecond)
+	tTotal := time.NewTimer(c.timeoutToGet)
+	tToCreate := time.NewTimer(c.timeoutToCreate)
 	for {
 		select {
 		case connInfo := <-conns:
@@ -120,7 +123,7 @@ func (c *channelPool) Get() (net.Conn, error) {
 			}
 			return c.wrapConn(conn), nil
 		case <-tTotal.C:
-			return nil, fmt.Errorf("Cannot get a connection. Timedout: %d milliseconds ", c.timeout.Milliseconds())
+			return nil, fmt.Errorf("Cannot get a connection. Timedout: %d milliseconds ", c.timeoutToGet.Milliseconds())
 		}
 	}
 }
